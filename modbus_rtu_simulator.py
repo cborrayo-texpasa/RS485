@@ -8,14 +8,24 @@ Formato: 32-bit float con little endian byte swap
 import serial
 import struct
 import time
+import requests
+import json
 
 # Configuración del puerto serial
-SERIAL_PORT = 'COM8'  # Cambiar según tu puerto USB
+#SERIAL_PORTS = ['/dev/ttyUSB0']
+SERIAL_PORTS = ['COM8']
 BAUDRATE = 9600
 PARITY = serial.PARITY_NONE
 STOPBITS = serial.STOPBITS_ONE
 BYTESIZE = serial.EIGHTBITS
 TIMEOUT = 1
+
+# Configuración de la API
+import os
+from dotenv import load_dotenv
+load_dotenv()
+HOST = os.getenv("HOSTNAME")
+API_KEY = os.getenv("API_KEY")
 
 # Mapeo de registros a variables
 REGISTER_MAP = {
@@ -127,26 +137,53 @@ def print_hex(data, label=""):
     hex_str = ' '.join(f'{b:02X}' for b in data)
     print(f"{label}: {hex_str}")
 
+def send_to_api(values):
+    headers = {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY
+    }
+
+    payload = {
+        "temperatura": values.get("Temperatura"),
+        "metros_cubicos_por_hora": values.get("Metros cúbicos/h"),
+        "presion": values.get("Presión"),
+        "frecuencia": values.get("Frecuencia"),
+        "multiplicador": values.get("Multiplicador"),
+        "flujo_total": values.get("Flujo Total"),
+        "desconocido": values.get("Desconocido 2")
+    }
+
+    try:
+        response = requests.post(HOST, headers=headers, data=json.dumps(payload))
+        if response.status_code == 200:
+            print("Datos enviados correctamente a la API")
+        else:
+            print(f"Error al enviar datos a la API: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Excepción al enviar datos a la API: {e}")
+
 def main():
     print("=== Cliente Modbus RTU - Lector de Registros ===")
-    print(f"Puerto: {SERIAL_PORT}")
+    print(f"Puertos a usar: {', '.join(SERIAL_PORTS)}")
     print(f"Baudrate: {BAUDRATE}")
     print(f"Comando: 01 03 00 00 00 0E (Slave 1, Función 3, Dir 0, Cant 14)")
     print(f"Formato: 32-bit float, Little Endian Byte Swap")
     
+    SERIAL_CONNECTED = []    
     try:
-        # Abrir puerto serial
-        ser = serial.Serial(
-            port=SERIAL_PORT,
-            baudrate=BAUDRATE,
-            parity=PARITY,
-            stopbits=STOPBITS,
-            bytesize=BYTESIZE,
-            timeout=TIMEOUT
-        )
+        for SERIAL_PORT in SERIAL_PORTS:
+            # Abrir puerto serial
+            ser = serial.Serial(
+                port=SERIAL_PORT,
+                baudrate=BAUDRATE,
+                parity=PARITY,
+                stopbits=STOPBITS,
+                bytesize=BYTESIZE,
+                timeout=TIMEOUT
+            )
         
-        print(f"Puerto {SERIAL_PORT} abierto correctamente\n")
-        
+            print(f"Puerto {SERIAL_PORT} abierto correctamente\n")
+            SERIAL_CONNECTED.append(ser)   
         while True:
             # Crear solicitud: Slave 1, Función 3, Dirección 0, Cantidad 14 registros
             request = create_request(
@@ -158,39 +195,41 @@ def main():
             
             print_hex(request, "Enviando solicitud")
             
-            # Limpiar buffer de entrada
-            ser.reset_input_buffer()
-            
-            # Enviar solicitud
-            ser.write(request)
-            
-            # Esperar respuesta
-            time.sleep(0.1)  # Dar tiempo al dispositivo para responder
-            
-            if ser.in_waiting > 0:
-                response_bytes = ser.read(ser.in_waiting)
-                print_hex(response_bytes, "Respuesta recibida")
+            for ser in SERIAL_CONNECTED:
+                # Limpiar buffer de entrada
+                ser.reset_input_buffer()
                 
-                # Parsear respuesta
-                parsed = parse_response(response_bytes)
+                # Enviar solicitud
+                ser.write(request)
                 
-                if parsed:
-                    print(f"\n✓ Respuesta válida (CRC correcto)")
-                    print(f"  Slave ID: {parsed['slave_id']}")
-                    print(f"  Función: {parsed['function_code']}")
-                    print(f"  Bytes de datos: {parsed['byte_count']}")
+                # Esperar respuesta
+                time.sleep(0.1)  # Dar tiempo al dispositivo para responder
+                
+                if ser.in_waiting > 0:
+                    response_bytes = ser.read(ser.in_waiting)
+                    print_hex(response_bytes, "Respuesta recibida")
                     
-                    # Extraer valores float
-                    values = parse_float_registers(parsed['data'])
+                    # Parsear respuesta
+                    parsed = parse_response(response_bytes)
                     
-                    print("\n--- Valores Leídos ---")
-                    for name, value in values.items():
-                        print(f"  {name:20s}: {value:12.6f}")
-                    print("----------------------\n")
+                    if parsed:
+                        print(f"\n✓ Respuesta válida (CRC correcto)")
+                        print(f"  Slave ID: {parsed['slave_id']}")
+                        print(f"  Función: {parsed['function_code']}")
+                        print(f"  Bytes de datos: {parsed['byte_count']}")
+                        
+                        # Extraer valores float
+                        values = parse_float_registers(parsed['data'])
+                        
+                        print(f"\n--- Valores Leídos en {ser.port} ---")
+                        for name, value in values.items():
+                            print(f"  {name:20s}: {value:12.6f}")
+                        print("----------------------\n")
+                        send_to_api(values)
+                    else:
+                        print(f"✗ Error al parsear la respuesta en {ser.port}\n")
                 else:
-                    print("✗ Error al parsear la respuesta\n")
-            else:
-                print("✗ No se recibió respuesta del dispositivo\n")
+                    print(f"✗ No se recibió respuesta del dispositivo en {ser.port}\n")
             
             # Esperar antes de la siguiente lectura
             time.sleep(2)
@@ -200,10 +239,11 @@ def main():
         print(f"Verifica que el puerto {SERIAL_PORT} esté disponible")
     except KeyboardInterrupt:
         print("\n\nLectura detenida por el usuario")
-    finally:
-        if 'ser' in locals() and ser.is_open:
-            ser.close()
-            print("Puerto serial cerrado")
+    finally:        
+        for ser in SERIAL_CONNECTED:
+            if ser.is_open:
+                ser.close()
+                print(f"Puerto serial {ser.port} cerrado")
 
 if __name__ == "__main__":
     main()
