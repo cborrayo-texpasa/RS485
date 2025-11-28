@@ -137,13 +137,14 @@ def print_hex(data, label=""):
     hex_str = ' '.join(f'{b:02X}' for b in data)
     print(f"{label}: {hex_str}")
 
-def send_to_api(values):
+def send_to_api(values, COM):
     headers = {
         'Content-Type': 'application/json',
         'x-api-key': API_KEY
     }
 
     payload = {
+        "com_port": COM,
         "temperatura": values.get("Temperatura"),
         "metros_cubicos_por_hora": values.get("Metros cúbicos/h"),
         "presion": values.get("Presión"),
@@ -225,7 +226,7 @@ def main():
                         for name, value in values.items():
                             print(f"  {name:20s}: {value:12.6f}")
                         print("----------------------\n")
-                        send_to_api(values)
+                        send_to_api(values, ser.port)
                     else:
                         print(f"✗ Error al parsear la respuesta en {ser.port}\n")
                 else:
