@@ -93,7 +93,8 @@ def parse_float_registers(data_bytes):
     return values
 
 def saveErrorLog(message):
-    with open("error_log.log", "a") as log_file:
+    error_file_name = f"error_log_{time.strftime('%Y-%m-%d')}.log"
+    with open(error_file_name, "a") as log_file:
         log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
 
 def get_raspberry_temperature():
