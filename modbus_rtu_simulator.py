@@ -21,7 +21,7 @@ API_KEY = os.getenv("API_KEY")
 
 REGISTER_MAP = {
     0: "Temperatura",
-    2: "Metros cúbicos/h",
+    2: "Flujo",
     4: "Presión",
     6: "Frecuencia",
     8: "Multiplicador",
@@ -92,7 +92,21 @@ def parse_float_registers(data_bytes):
     
     return values
 
-def send_to_api(values, COM):
+def saveErrorLog(message):
+    with open("error_log.log", "a") as log_file:
+        log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+
+def get_raspberry_temperature():
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            temp_str = f.read().strip()
+            temp_c = int(temp_str) / 1000.0
+            return temp_c
+    except Exception as e:
+        saveErrorLog(f"Error al leer la temperatura de la Raspberry Pi: {e}")
+        return None
+
+def send_to_api(values, COM, temperatura_raspberry):
     headers = {
         'Content-Type': 'application/json',
         'x-api-key': API_KEY
@@ -101,19 +115,20 @@ def send_to_api(values, COM):
         "device_id": DEVICE_ID,
         "com_port": COM,
         "temperatura": values.get("Temperatura"),
-        "metros_cubicos_por_hora": values.get("Metros cúbicos/h"),
+        "flujo": values.get("Flujo"),
         "presion": values.get("Presión"),
         "frecuencia": values.get("Frecuencia"),
         "multiplicador": values.get("Multiplicador"),
         "flujo_total": values.get("Flujo Total"),
-        "unidad_medida": values.get("Unidad medida")
+        "unidad_medida": values.get("Unidad medida"),
+        "temperatura_raspberry": temperatura_raspberry
     }
     try:
         response = requests.post(HOST, headers=headers, data=json.dumps(payload))
         if response.status_code != 200:
-            print(f"Error al enviar datos a la API: {response.status_code} - {response.text}")
+            saveErrorLog(f"Error al enviar datos a la API: {response.status_code} - {response.text}")
     except Exception as e:
-        print(f"Excepción al enviar datos a la API: {e}")
+        saveErrorLog(f"Excepción al enviar datos a la API: {e}")
 
 def main():
     SERIAL_CONNECTED = []    
@@ -144,16 +159,17 @@ def main():
                     parsed = parse_response(response_bytes)                    
                     if parsed:
                         values = parse_float_registers(parsed['data'])
-                        send_to_api(values, ser.port)
+                        temperatura_raspberry = get_raspberry_temperature()
+                        send_to_api(values, ser.port, temperatura_raspberry)
                     else:
-                        print(f"✗ Error al parsear la respuesta en {ser.port}\n")
+                        saveErrorLog(f"Error al parsear la respuesta en {ser.port}")
                 else:
-                    print(f"✗ No se recibió respuesta del dispositivo en {ser.port}\n")
+                    saveErrorLog(f"No se recibió respuesta del dispositivo en {ser.port}")
             time.sleep(2)            
     except serial.SerialException as e:
-        print(f"\nError al abrir el puerto serial: {e}")
+        saveErrorLog(f"Error al abrir el puerto serial: {e}")
     except KeyboardInterrupt:
-        print("\n\nLectura detenida por el usuario")
+        saveErrorLog("Lectura detenida por el usuario")
     finally:        
         for ser in SERIAL_CONNECTED:
             if ser.is_open:
